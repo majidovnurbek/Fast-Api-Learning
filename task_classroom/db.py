@@ -1,60 +1,61 @@
 import psycopg2
-from dotenv import load_dotenv
-import os
-
-load_dotenv(".env")
-
-conn = psycopg2.connect(
-    database=os.getenv('DB_NAME'),
-    user=os.getenv('DB_USER'),
-    password=os.getenv('DB_PASSWD'),
-    host=os.getenv('DB_HOST'),
-    port=os.getenv('DB_PORT')
-)
-
-cursor = conn.cursor()  # creating a cursor
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users
-(
-    id serial PRIMARY KEY NOT NULL,
-    fullname VARCHAR(255)  NOT NULL,
-    username VARCHAR(255) NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    password VARCHAR(255) NOT NULL
-)
-""")
-
+from psycopg2.extras import DictCursor
 
 class Database:
-    def __init__(self, db_file, user, password, host, port):
-        self.connection = psycopg2.connect(database=db_file, user=user, password=password, host=host, port=port)
-        self.cursor = self.connection.cursor()
+    def __init__(self, db_url: str):
+        self.db_url = db_url
+        self.conn = None
 
-    def add_user(self, full_name, username, email, password):
-        with self.connection:
-            return self.cursor.execute('INSERT INTO users (fullname, username, email, password) VALUES (%s, %s, %s, %s)',
-                                       (full_name, username, email, password))
+    def connect(self):
+        self.conn = psycopg2.connect(self.db_url)
+        print("Database connected!")
 
-    def update_user(self, id,  full_name, username, email, password):
-        with self.connection:
-            return self.cursor.execute('UPDATE users SET fullname=%s, username=%s, email=%s, password=%s WHERE id=%s',
-                                       (full_name,username, email, password, id))
+    def create_table(self):
+        with self.conn.cursor() as cursor:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT UNIQUE NOT NULL,
+                    full_name TEXT NOT NULL,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL
+                )
+            ''')
+            self.conn.commit()
+            print("Table 'users' created successfully!")
 
-    def get_users(self):
-        with self.connection:
-            self.cursor.execute("SELECT * FROM users")
-            return self.cursor.fetchall()
+    def add(self, user_id: int, full_name: str, username: str, email: str):
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO users (user_id, full_name, username, email) VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING",
+                (user_id, full_name, username, email)
+            )
+            self.conn.commit()
 
-    def delete_users(self, id):
-        with self.connection:
-            return self.cursor.execute("DELETE FROM users WHERE id = %s", (id,))
+    def all(self) -> list[dict]:
+        with self.conn.cursor(cursor_factory=DictCursor) as cursor:
+            cursor.execute("SELECT * FROM users")
+            users = cursor.fetchall()
+            return [dict(user) for user in users]
 
-    def check_user(self, username):
-        with self.connection:
-            self.cursor.execute("SELECT username FROM users WHERE username = %s", (username,))
-            return self.cursor.fetchone()
+    def is_exists(self, user_id: int) -> bool:
+        with self.conn.cursor() as cursor:
+            cursor.execute("SELECT EXISTS(SELECT 1 FROM users WHERE user_id = %s)", (user_id,))
+            return cursor.fetchone()[0]
 
-conn.commit()
-conn.close()
+    def update(self, user_id: int, new_name: str) -> int:
+        with self.conn.cursor() as cursor:
+            cursor.execute("UPDATE users SET full_name = %s WHERE user_id = %s", (new_name, user_id))
+            self.conn.commit()
+            return cursor.rowcount
 
+    def delete(self, user_id: int) -> int:
+        with self.conn.cursor() as cursor:
+            cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+            self.conn.commit()
+            return cursor.rowcount
+
+    def close(self):
+        if self.conn:
+            self.conn.close()
+            print("Database connection closed!")
